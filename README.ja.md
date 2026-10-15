@@ -7,7 +7,7 @@ text-gate は、AI エージェントが文を読む前や、文の中のリン�
 - **見えない文字。** タグ文字、文字の向きを変える制御文字、異体字セレクタを並べた隠しデータなどを使うと、人には見えないまま AI にだけ読める文を埋め込めます。text-gate はこれを取り除くか、見える形に置き換え、隠れていた文を元に戻して見せます。
 - **偽ドメイン。** たとえば `xn--mazon-3ve.com` は「amazon.com」に見えますが、先頭の「а」はキリル文字です。text-gate は、Punycode の形、混ざっている文字の種類、見た目の形を返します。
 
-本来の使い方は、Claude Code のフックに組み込む門番です。エージェントが開こうとする URL と、読もうとするツールの結果を、すべてここに通します（「Claude Code のフックで使う」を見てください）。同じ検査はコマンドと Rust のライブラリとしても使えるので、ページの読み取り道具などにも組み込めます。文字の種類ごとに一律に拒否することはしません。日本語・ロシア語・アラビア語の文、絵文字、正当な国際化ドメインはそのまま通ります。
+本来の使い方は、Claude Code と Codex のフックに組み込む門番です。エージェントが開こうとする URL と、読もうとするツールの結果を、すべてここに通します（「Claude Code と Codex のフックで使う」を見てください）。同じ検査はコマンドと Rust のライブラリとしても使えるので、ページの読み取り道具などにも組み込めます。文字の種類ごとに一律に拒否することはしません。日本語・ロシア語・アラビア語の文、絵文字、正当な国際化ドメインはそのまま通ります。
 
 ## 見つけるもの
 
@@ -62,27 +62,29 @@ cargo build --release --manifest-path text-gate/Cargo.toml
 install -m 755 text-gate/target/release/text-gate ~/.local/bin/text-gate
 ```
 
-## Claude Code のフックで使う
+## Claude Code と Codex のフックで使う
 
-これが本来の使い方です。[`examples/claude_hook.rs`](examples/claude_hook.rs) は、ライブラリを使ったフックの完成例です。
+これが本来の使い方です。[`examples/hook.rs`](examples/hook.rs) は、ライブラリを使ったフックの完成例です。1つのバイナリで両方に対応し、Codex からは `--codex` を付けて呼びます。検査の中身は同じで、違うのは返事の形だけです。Codex のフックは、確認を出すことと、ツールの結果をその場で差し替えることにまだ対応していないためです。
 
-| フックの時点 | 例のフックがすること |
-|---|---|
-| `PreToolUse` | ツールの入力の文字列のどれかに偽ドメインがあれば、確認なしで止めます（WebFetch、ブラウザーの道具、Bash の `curl` など）。Edit や Write で high の見えない文字を書き込むときは、確認に回します。 |
-| `PostToolUse`（全ツール） | Claude が読む前に、`updatedToolOutput` でツールの結果を同じ JSON の形のまま書き換えます。外から来た結果からは見えない文字を取り除きます。手元のファイルの結果（Read、Bash、Grep など）は `⟦U+200B⟧` の形で見せます。そうしないと、次の Edit が元のファイルと一致しなくなるためです。見つけたもの（元に戻した隠し文を含む）は、信頼できないデータと明記して文脈に足します。 |
-| `UserPromptSubmit` | 依頼文で見つけたものを文脈に足します。依頼文は止めないので、偽ドメインについて話すこともできます。 |
+| フックの時点 | Claude Code | Codex（`--codex`） |
+|---|---|---|
+| `PreToolUse` | ツールの入力の文字列のどれかに偽ドメインがあれば、確認なしで止めます（WebFetch、ブラウザーの道具、Bash の `curl` など）。Edit や Write で high の見えない文字を書き込むときは、確認に回します。 | 偽ドメインは同じように止めます（Bash、ブラウザーなどの MCP の道具、`apply_patch`）。high の見えない文字の書き込みは、確認に回せないので止めます。 |
+| `PostToolUse`（全ツール） | Claude が読む前に、`updatedToolOutput` で結果を同じ JSON の形のまま書き換えます。外から来た結果からは見えない文字を取り除き、手元のファイルの結果（Read、Bash、Grep など）は `⟦U+200B⟧` の形で見せます。そうしないと、次の Edit が元のファイルと一致しなくなるためです。 | high の文字が見つかったときは結果を止め、無害化した本文を代わりに渡します（`decision: "block"` は結果を `reason` の文に置き換えます）。ゼロ幅スペースのような軽い文字はそのままにします。結果に偽ドメインの名前があれば、警告を足します。 |
+| `UserPromptSubmit` | 依頼文で見つけたものを文脈に足します。依頼文は止めないので、偽ドメインについて話すこともできます。 | 同じです。 |
+
+どちらでも、見つけたもの（元に戻した隠し文を含む）は、信頼できないデータと明記して文脈に足します。
 
 ビルドして置きます。
 
 ```bash
-cargo build --release --example claude_hook --manifest-path text-gate/Cargo.toml
+cargo build --release --example hook --manifest-path text-gate/Cargo.toml
 ```
 
 ```bash
-install -m 755 text-gate/target/release/examples/claude_hook ~/.local/bin/text-gate-hook
+install -m 755 text-gate/target/release/examples/hook ~/.local/bin/text-gate-hook
 ```
 
-`~/.claude/settings.json` に登録します。
+Claude Code では、`~/.claude/settings.json` に登録します。
 
 ```json
 {
@@ -100,8 +102,27 @@ install -m 755 text-gate/target/release/examples/claude_hook ~/.local/bin/text-g
 }
 ```
 
+Codex では、`~/.codex/hooks.json` に `--codex` を付けて登録し、Codex に聞かれたら新しいフックを承認します。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook --codex", "timeout": 1 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook --codex", "timeout": 2 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook --codex", "timeout": 1 }] }
+    ]
+  }
+}
+```
+
 - 調べるものが無いときは、ほとんど何もしません。どの文字列も、まず `needs_scan` の近道を通ります。
-- フックが時間切れになると、Claude Code はその判定なしで先へ進みます。フックに処理を足すとき（下の「説明の追加」など）は、時間切れより十分短く収めてください。
+- フックが時間切れになると、Claude Code はその判定なしで先へ進みます（Codex も、管理されたフックについては同じだと文書にあります）。フックに処理を足すとき（下の「説明の追加」など）は、時間切れより十分短く収めてください。
+- Codex が自分のサーバー側で行う Web 検索はフックを通らないので、この検査からは見えません。
 - すでにあるフックに組み込むときは、例と同じようにライブラリの `scan`、`find_spoofed`、`alert_text` を呼びます。
 
 ## ほかの使い方

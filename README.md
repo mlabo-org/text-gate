@@ -7,7 +7,7 @@ text-gate checks text before an AI agent reads it or opens a link from it. It ca
 - **Invisible characters.** Unicode tag characters, bidi controls, variation-selector payloads and similar characters can hide text from a human while an AI model still reads it. text-gate removes them, or shows them as visible escapes, and decodes the hidden text so you can see it.
 - **Spoofed domains.** Look-alike hosts such as `xn--mazon-3ve.com`, which displays as "amazon.com" but whose first letter is the Cyrillic `а`. text-gate reports the punycode form, the scripts involved, and what the host looks like.
 
-Its main use is as a gate in Claude Code hooks: every URL the agent is about to open and every tool result it is about to read passes through it (see [Use it in Claude Code hooks](#use-it-in-claude-code-hooks)). The same checks are available as a CLI and a Rust library for other places, such as a page reader. It does not reject whole scripts. Japanese, Russian or Arabic text, emoji and legitimate internationalized domains pass.
+Its main use is as a gate in Claude Code and Codex hooks: every URL the agent is about to open and every tool result it is about to read passes through it (see [Use it in Claude Code and Codex hooks](#use-it-in-claude-code-and-codex-hooks)). The same checks are available as a CLI and a Rust library for other places, such as a page reader. It does not reject whole scripts. Japanese, Russian or Arabic text, emoji and legitimate internationalized domains pass.
 
 ## What it detects
 
@@ -62,27 +62,29 @@ cargo build --release --manifest-path text-gate/Cargo.toml
 install -m 755 text-gate/target/release/text-gate ~/.local/bin/text-gate
 ```
 
-## Use it in Claude Code hooks
+## Use it in Claude Code and Codex hooks
 
-This is the main use. [`examples/claude_hook.rs`](examples/claude_hook.rs) is a complete command hook built on the library.
+This is the main use. [`examples/hook.rs`](examples/hook.rs) is a complete command hook built on the library. One binary serves both hosts: Codex calls it with `--codex`. The checks are the same; only the replies differ, because Codex hooks cannot yet ask for confirmation or replace a tool result in place.
 
-| Hook event | What the example does |
-|---|---|
-| `PreToolUse` | Denies the call, with no confirmation, when any string in the tool input names a spoofed domain (WebFetch, browser tools, `curl` in Bash, and so on). Writing high-severity invisible characters with Edit or Write asks first. |
-| `PostToolUse` (all tools) | Rewrites the tool result before Claude sees it, using `updatedToolOutput` with the same JSON shape. External results lose the invisible characters; local-file results (Read, Bash, Grep and others) show them as `⟦U+200B⟧`, so a later Edit still matches the file. Findings, including decoded hidden text, are added as context and labelled as untrusted data. |
-| `UserPromptSubmit` | Adds findings in the prompt as context. The prompt is never blocked, so you can still talk about a spoofed domain. |
+| Hook event | Claude Code | Codex (`--codex`) |
+|---|---|---|
+| `PreToolUse` | Denies the call, with no confirmation, when any string in the tool input names a spoofed domain (WebFetch, browser tools, `curl` in Bash, and so on). Writing high-severity invisible characters with Edit or Write asks first. | Same denial for spoofed domains (Bash, MCP tools such as browsers, `apply_patch`). Writing high-severity invisible characters is denied, since Codex cannot ask. |
+| `PostToolUse` (all tools) | Rewrites the result before Claude sees it, using `updatedToolOutput` with the same JSON shape. External results lose the invisible characters; local-file results (Read, Bash, Grep and others) show them as `⟦U+200B⟧`, so a later Edit still matches the file. | When a high-severity character is found, blocks the result and passes the sanitized text instead (`decision: "block"` replaces the result with its `reason`). Light characters such as a zero-width space are left alone. A spoofed domain name in a result adds a warning. |
+| `UserPromptSubmit` | Adds findings in the prompt as context. The prompt is never blocked, so you can still talk about a spoofed domain. | Same. |
+
+On both hosts, findings, including decoded hidden text, are added as context and labelled as untrusted data.
 
 Build and install it:
 
 ```bash
-cargo build --release --example claude_hook --manifest-path text-gate/Cargo.toml
+cargo build --release --example hook --manifest-path text-gate/Cargo.toml
 ```
 
 ```bash
-install -m 755 text-gate/target/release/examples/claude_hook ~/.local/bin/text-gate-hook
+install -m 755 text-gate/target/release/examples/hook ~/.local/bin/text-gate-hook
 ```
 
-Then register it in `~/.claude/settings.json`:
+For Claude Code, register it in `~/.claude/settings.json`:
 
 ```json
 {
@@ -100,8 +102,27 @@ Then register it in `~/.claude/settings.json`:
 }
 ```
 
+For Codex, register it in `~/.codex/hooks.json` with `--codex`, and approve the new hook in Codex when it asks:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook --codex", "timeout": 1 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook --codex", "timeout": 2 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook --codex", "timeout": 1 }] }
+    ]
+  }
+}
+```
+
 - A hook call with nothing to find does almost no work: every string goes through the `needs_scan` fast path first.
-- If a hook times out, Claude Code continues without its decision, so keep any work you add inside the hook (for example the optional explanation below) well inside the timeout.
+- If a hook times out, Claude Code goes ahead without its decision (Codex documents the same for its managed hooks), so keep any work you add inside the hook (for example the optional explanation below) well inside the timeout.
+- Codex's hosted web search does not go through hooks, so these checks cannot see it.
 - To fold the checks into a hook you already have, call `scan`, `find_spoofed` and `alert_text` from the library the same way the example does.
 
 ## Other uses
