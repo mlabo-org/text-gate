@@ -1,0 +1,17 @@
+[package]
+name = "text-gate"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Detect invisible Unicode characters and spoofed (look-alike) domains in text before an AI agent reads or opens it"
+license = "MIT"
+repository = "https://github.com/mlabo-org/text-gate"
+readme = "README.md"
+keywords = ["unicode", "homoglyph", "idn", "security", "prompt-injection"]
+categories = ["text-processing", "command-line-utilities"]
+
+[dependencies]
+idna = "1.1.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+unicode-security = "0.1.2"
