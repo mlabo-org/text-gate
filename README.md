@@ -7,7 +7,7 @@ text-gate checks text before an AI agent reads it or opens a link from it. It ca
 - **Invisible characters.** Unicode tag characters, bidi controls, variation-selector payloads and similar characters can hide text from a human while an AI model still reads it. text-gate removes them, or shows them as visible escapes, and decodes the hidden text so you can see it.
 - **Spoofed domains.** Look-alike hosts such as `xn--mazon-3ve.com`, which displays as "amazon.com" but whose first letter is the Cyrillic `а`. text-gate reports the punycode form, the scripts involved, and what the host looks like.
 
-It is meant to sit in front of agents: in Claude Code hooks, in a page reader, or between a parent agent and the CLI workers it launches. It does not reject whole scripts. Japanese, Russian or Arabic text, emoji and legitimate internationalized domains pass.
+Its main use is as a gate in Claude Code hooks: every URL the agent is about to open and every tool result it is about to read passes through it (see [Use it in Claude Code hooks](#use-it-in-claude-code-hooks)). The same checks are available as a CLI and a Rust library for other places, such as a page reader. It does not reject whole scripts. Japanese, Russian or Arabic text, emoji and legitimate internationalized domains pass.
 
 ## What it detects
 
@@ -62,7 +62,53 @@ cargo build --release --manifest-path text-gate/Cargo.toml
 install -m 755 text-gate/target/release/text-gate ~/.local/bin/text-gate
 ```
 
-[cli-agent-runner](https://github.com/mlabo-org/cli-agent-runner) looks for the binary at `~/.local/bin/text-gate`.
+## Use it in Claude Code hooks
+
+This is the main use. [`examples/claude_hook.rs`](examples/claude_hook.rs) is a complete command hook built on the library.
+
+| Hook event | What the example does |
+|---|---|
+| `PreToolUse` | Denies the call, with no confirmation, when any string in the tool input names a spoofed domain (WebFetch, browser tools, `curl` in Bash, and so on). Writing high-severity invisible characters with Edit or Write asks first. |
+| `PostToolUse` (all tools) | Rewrites the tool result before Claude sees it, using `updatedToolOutput` with the same JSON shape. External results lose the invisible characters; local-file results (Read, Bash, Grep and others) show them as `⟦U+200B⟧`, so a later Edit still matches the file. Findings, including decoded hidden text, are added as context and labelled as untrusted data. |
+| `UserPromptSubmit` | Adds findings in the prompt as context. The prompt is never blocked, so you can still talk about a spoofed domain. |
+
+Build and install it:
+
+```bash
+cargo build --release --example claude_hook --manifest-path text-gate/Cargo.toml
+```
+
+```bash
+install -m 755 text-gate/target/release/examples/claude_hook ~/.local/bin/text-gate-hook
+```
+
+Then register it in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook", "timeout": 5 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook", "timeout": 10 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/text-gate-hook", "timeout": 10 }] }
+    ]
+  }
+}
+```
+
+- A hook call with nothing to find does almost no work: every string goes through the `needs_scan` fast path first.
+- If a hook times out, Claude Code continues without its decision, so keep any work you add inside the hook (for example the optional explanation below) well inside the timeout.
+- To fold the checks into a hook you already have, call `scan`, `find_spoofed` and `alert_text` from the library the same way the example does.
+
+## Other uses
+
+- **CLI**: for scripts and tools in other languages (below).
+- **Library**: for Rust programs, such as a page reader that cleans what it returns (below).
+- **Between a parent agent and its workers**: [cli-agent-runner](https://github.com/mlabo-org/cli-agent-runner) is a special case. It runs the CLI at `~/.local/bin/text-gate` on every prompt it sends to a worker CLI and on every result it brings back, and refuses to launch a worker when the gate is missing.
 
 ## CLI
 
