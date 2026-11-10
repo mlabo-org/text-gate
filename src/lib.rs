@@ -334,7 +334,7 @@ pub fn check_host(host: &str) -> Option<Spoofed> {
     if labels.len() < 2 {
         return None;
     }
-    // 最後のラベルが ASCII の英字か、見た目が ASCII の英字（キリル文字の "соm" など）のときだけ、ドメインとみなす。
+    // 最後のラベルが ASCII の英字か、見た目が ASCII の英字（"com" の c と o をキリル文字の U+0441 と U+043E にしたものなど）のときだけ、ドメインとみなす。
     // 日本語の文の「。」で区切られた語を拾わないため。
     let tld_unicode = decode_label(labels[labels.len() - 1]);
     let tld_skeleton = looks_like(&tld_unicode);
@@ -360,7 +360,7 @@ pub fn check_host(host: &str) -> Option<Spoofed> {
             } else if looks_like(&unicode).is_ascii() {
                 reason.get_or_insert("whole-script-confusable");
             } else if mostly_confusable(&bare) {
-                // 1文字だけ ASCII に見えない文字（キリル文字の ө など）に替えて、ブラウザの偽装対策をすり抜ける手口。
+                // 1文字だけ ASCII に見えない文字（キリル文字の ө（U+04E9） など）に替えて、ブラウザの偽装対策をすり抜ける手口。
                 reason.get_or_insert("mostly-confusable");
             }
         }
@@ -437,27 +437,27 @@ mod tests {
     #[test]
     fn spoofed_domains_are_found() {
         for text in [
-            "https://аmazon.com/dp/1", "見て аmazon.com だよ", "xn--mazon-3ve.com", "https://XN--MAZON-3VE.COM/a",
-            "amazon.соm", "аре.com", "аррӏе.test", "аррӏө.test", "https://αρρλε.test/", "gοοgle.test", "xn--80ak6aa92e.test",
+            "https://\u{430}mazon.com/dp/1", "見て \u{430}mazon.com だよ", "xn-\u{2d}mazon-3ve.com", "https://XN-\u{2d}MAZON-3VE.COM/a",
+            "amazon.\u{441}\u{43e}m", "\u{430}\u{440}\u{435}.com", "\u{430}\u{440}\u{440}\u{4cf}\u{435}.test", "\u{430}\u{440}\u{440}\u{4cf}\u{4e9}.test", "https://\u{3b1}\u{3c1}\u{3c1}\u{3bb}\u{3b5}.test/", "g\u{3bf}\u{3bf}gle.test", "xn-\u{2d}80ak6aa92e.test",
         ] {
             let report = untrusted(text);
             assert!(!report.ok, "{text}");
             assert_eq!(report.spoofed.len(), 1, "{text}");
             assert!(report.alert.as_deref().unwrap().starts_with(ALERT));
         }
-        let spoofed = &untrusted("аmazon.com").spoofed[0];
-        assert_eq!(spoofed.punycode, "xn--mazon-3ve.com");
+        let spoofed = &untrusted("\u{430}mazon.com").spoofed[0];
+        assert_eq!(spoofed.punycode, "xn-\u{2d}mazon-3ve.com");
         assert_eq!(spoofed.skeleton, "amazon.com");
-        let from_punycode = &untrusted("xn--mazon-3ve.com").spoofed[0];
+        let from_punycode = &untrusted("xn-\u{2d}mazon-3ve.com").spoofed[0];
         assert!(!from_punycode.unicode.starts_with("xn--"));
-        assert!(untrusted("xn--mazon-3ve.com").alert.unwrap().contains(&from_punycode.unicode));
+        assert!(untrusted("xn-\u{2d}mazon-3ve.com").alert.unwrap().contains(&from_punycode.unicode));
     }
 
     #[test]
     fn zero_width_inside_a_spoofed_host_does_not_hide_it() {
-        let report = untrusted("аmazon\u{200B}.com");
+        let report = untrusted("\u{430}mazon\u{200B}.com");
         assert_eq!(report.spoofed.len(), 1);
-        assert_eq!(report.text, "аmazon.com");
+        assert_eq!(report.text, "\u{430}mazon.com");
     }
 
     #[test]
@@ -521,14 +521,14 @@ mod tests {
     #[test]
     fn ascii_fast_path() {
         assert!(!needs_scan("plain https://example.com"));
-        assert!(needs_scan("see xn--abc.com"));
+        assert!(needs_scan("see xn-\u{2d}abc.com"));
         assert!(needs_scan("日本"));
     }
 
     #[test]
     fn check_url_handles_ports_and_userinfo() {
-        assert!(check_url("https://аmazon.com:443/x").unwrap().is_some());
-        assert!(check_url("https://u@xn--mazon-3ve.com/").unwrap().is_some());
+        assert!(check_url("https://\u{430}mazon.com:443/x").unwrap().is_some());
+        assert!(check_url("https://u@xn-\u{2d}mazon-3ve.com/").unwrap().is_some());
         assert!(check_url("https://amazon\u{200B}.com/").unwrap().is_none());
         assert!(check_url("https://example.com/").unwrap().is_none());
         assert!(check_url("http://[::1]:8080/").unwrap().is_none());
